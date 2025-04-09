@@ -21,6 +21,7 @@ import SidePanel from "./components/side-panel/SidePanel";
 import { Altair } from "./components/altair/Altair";
 import ControlTray from "./components/control-tray/ControlTray";
 import cn from "classnames";
+import {getMistyInstance} from './misty/MistyProvider';
 
 const API_KEY = process.env.REACT_APP_GEMINI_API_KEY as string;
 if (typeof API_KEY !== "string") {
@@ -37,6 +38,10 @@ function App() {
   // either the screen capture, the video or null, if null we hide it
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
 
+  const misty = getMistyInstance('10.134.71.217')
+  const timer = setTimeout(() => {
+    misty?.connect2Misty();
+  }, 2000);
   return (
     <div className="App">
       <LiveAPIProvider url={uri} apiKey={API_KEY}>

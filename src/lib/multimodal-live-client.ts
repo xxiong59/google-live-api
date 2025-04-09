@@ -38,6 +38,8 @@ import {
   type LiveConfig,
 } from "../multimodal-live-types";
 import { blobToJSON, base64ToArrayBuffer } from "./utils";
+import {getMistyInstance} from "../misty/MistyProvider"
+import { useRef, useState } from "react";
 
 /**
  * the events that this client will emit
@@ -69,6 +71,11 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
   public ws: WebSocket | null = null;
   protected config: LiveConfig | null = null;
   public url: string = "";
+  private misty = getMistyInstance("");
+  private isFirstReceive = true;
+  private timeID: NodeJS.Timer | undefined;
+  private emotion = ["trust", "joy"];
+  private emotionIndex = 0;
   public getConfig() {
     return { ...this.config };
   }
@@ -197,12 +204,29 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
         return;
       }
       if (isTurnComplete(serverContent)) {
+        console.log("server.send", "isTurnComplete");
         this.log("server.send", "turnComplete");
         this.emit("turncomplete");
         //plausible theres more to the message, continue
+        this.isFirstReceive = true;
+        this.misty?.executeBehavior("default");
+        clearInterval(this.timeID)
       }
 
       if (isModelTurn(serverContent)) {
+        console.log("server.send", "isModelTurn");
+        if (this.isFirstReceive == true) {
+          this.misty?.executeBehavior("trust");
+          this.timeID = setInterval(() => {
+            this.misty?.executeBehavior(this.emotion[this.emotionIndex])
+            if (this.emotionIndex == 0) {
+              this.emotionIndex = 1;
+            } else {
+              this.emotionIndex = 0;
+            }
+          }, 3000)
+          this.isFirstReceive = false;
+        }
         let parts: Part[] = serverContent.modelTurn.parts;
 
         // when its audio that is returned for modelTurn
