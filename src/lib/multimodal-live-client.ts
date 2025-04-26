@@ -40,6 +40,8 @@ import {
 import { blobToJSON, base64ToArrayBuffer } from "./utils";
 import {getMistyInstance} from "../misty/MistyProvider"
 import { useRef, useState } from "react";
+import { RealtimeTranscription } from "./test-transcript";
+import {AssemblyAi} from "./assemblyAi"
 
 /**
  * the events that this client will emit
@@ -62,6 +64,20 @@ export type MultimodalLiveAPIClientConnection = {
   apiKey: string;
 };
 
+interface TranscriptEntry {
+  id: number;
+  timestamp: string;
+  question: string;
+  answer: string;
+}
+
+interface Conversation {
+  id: number;
+  title: string;
+  startTime: string;
+  transcripts: TranscriptEntry[];
+}
+
 /**
  * A event-emitting class that manages the connection to the websocket and emits
  * events to the rest of the application.
@@ -72,10 +88,15 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
   protected config: LiveConfig | null = null;
   public url: string = "";
   private misty = getMistyInstance("");
+  private assemblyAi = new AssemblyAi();
+  private transcript = new RealtimeTranscription();
   private isFirstReceive = true;
   private timeID: NodeJS.Timer | undefined;
   private emotion = ["trust", "joy"];
   private emotionIndex = 0;
+  // private transcriptHistory: TranscriptEntry[] = [];
+  private conversationHistory: Conversation[] = [];
+  private currentConversation: Conversation | null = null;
   public getConfig() {
     return { ...this.config };
   }
@@ -128,13 +149,13 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
         this.emit("open");
 
         this.ws = ws;
-
+        this.startNewConversation();
         const setupMessage: SetupMessage = {
           setup: this.config,
         };
         this._sendDirect(setupMessage);
         this.log("client.send", "setup");
-
+        this.assemblyAi.init();
         ws.removeEventListener("error", onError);
         ws.addEventListener("close", (ev: CloseEvent) => {
           console.log(ev);
@@ -190,6 +211,7 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
 
     if (isSetupCompleteMessage(response)) {
       this.log("server.send", "setupComplete");
+      this.transcript.initWebSocket();
       this.emit("setupcomplete");
       return;
     }
@@ -209,17 +231,18 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
         this.emit("turncomplete");
         //plausible theres more to the message, continue
         this.isFirstReceive = true;
-        this.misty?.executeBehavior("default");
-        clearInterval(this.timeID)
+        // this.misty?.executeBehavior("default");
+        clearInterval(this.timeID);
+        this.get_transcript();
       }
 
       if (isModelTurn(serverContent)) {
         console.log("server.send", "isModelTurn");
-        if (this.isFirstReceive == true) {
-          this.misty?.executeBehavior("trust");
+        if (this.isFirstReceive === true) {
+          // this.misty?.executeBehavior("trust");
           this.timeID = setInterval(() => {
-            this.misty?.executeBehavior(this.emotion[this.emotionIndex])
-            if (this.emotionIndex == 0) {
+            // this.misty?.executeBehavior(this.emotion[this.emotionIndex])
+            if (this.emotionIndex === 0) {
               this.emotionIndex = 1;
             } else {
               this.emotionIndex = 0;
@@ -242,16 +265,22 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
         base64s.forEach((b64) => {
           if (b64) {
             const data = base64ToArrayBuffer(b64);
+            this.transcript.uploadAudio(b64);
+            this.send_transcript(b64, "a");
+            // if (this.assemblyAi.ws?.readyState === WebSocket.OPEN) {
+            //     this.assemblyAi.sendAudio(data)
+            // }
             this.emit("audio", data);
             this.log(`server.audio`, `buffer (${data.byteLength})`);
           }
         });
         if (!otherParts.length) {
+          // console.log("server.send", "other part is empty");
           return;
         }
-
+        
         parts = otherParts;
-
+        console.log("server.send", parts);
         const content: ModelTurn = { modelTurn: { parts } };
         this.emit("content", content);
         this.log(`server.content`, response);
@@ -278,6 +307,7 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
       if (hasAudio && hasVideo) {
         break;
       }
+      this.send_transcript(ch.data, "q");
     }
     const message =
       hasAudio && hasVideo
@@ -294,6 +324,7 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
       },
     };
     this._sendDirect(data);
+
     this.log(`client.realtimeInput`, message);
   }
 
@@ -341,4 +372,106 @@ export class MultimodalLiveClient extends EventEmitter<MultimodalLiveClientEvent
     const str = JSON.stringify(request);
     this.ws.send(str);
   }
+
+  async send_transcript(audioBase64Data: string, source: string) {
+    try {
+      const response = await fetch('http://localhost:8000/transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_data: audioBase64Data,
+          language_code: 'en-US',  // 英语识别
+          sample_rate: 16000,       // 采样率
+          source: source,
+        })
+      });
+      
+      // 解析响应
+      const result = await response.json();
+      
+      // 处理结果
+      if (result.error) {
+        console.error('识别错误:', result.error);
+      } else {
+        // console.log('识别文本:', result.q_text);
+        // console.log('是否为最终结果:', result.is_final);
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('请求失败:', error);
+      return { text: '', is_final: false};
+    }
+  }
+
+  async get_transcript() {
+    try {
+      const response = await fetch('http://localhost:8000/get_transcribe', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      // 解析响应
+      const result = await response.json();
+      
+      // 处理结果
+      if (result.error) {
+        console.error('识别错误:', result.error);
+      } else {
+        console.log('识别文本q:', result.q_text);
+        console.log('识别文本a:', result.a_text);
+        console.log('是否为最终结果:', result.is_final);
+        this.log("transcribe", "q: " + result.q_text);
+        this.log("transcribe", "a: " + result.a_text);
+        this.saveTranscript(result.q_text, result.a_text)
+      }
+      
+      return result;
+    } catch (error) {
+      console.error('请求失败:', error);
+      return { text: '', is_final: false};
+    }
+  }
+
+  saveTranscript(qText: string, aText: string) {
+    // Create a new transcript entry with timestamp
+    const transcriptEntry: TranscriptEntry = {
+      id: Date.now(), // Unique ID using timestamp
+      timestamp: new Date().toISOString(),
+      question: qText,
+      answer: aText
+    };
+
+    if (!this.currentConversation) {
+      this.startNewConversation();
+    }
+
+    this.currentConversation!.transcripts.push(transcriptEntry);
+
+    return transcriptEntry;
+  }
+
+  startNewConversation(title: string = `Conversation ${this.conversationHistory.length + 1}`): Conversation {
+    const newConversation: Conversation = {
+      id: Date.now(),
+      title: title,
+      startTime: new Date().toISOString(),
+      transcripts: []
+    };
+    
+    // Set as current conversation
+    this.currentConversation = newConversation;
+    
+    // Add to history
+    this.conversationHistory.push(newConversation);
+  
+    
+    return newConversation;
+  }
 }
+
+

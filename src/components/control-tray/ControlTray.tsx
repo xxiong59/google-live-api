@@ -79,6 +79,7 @@ function ControlTray({
     if (!connected && connectButtonRef.current) {
       connectButtonRef.current.focus();
     }
+    
   }, [connected]);
   useEffect(() => {
     document.documentElement.style.setProperty(

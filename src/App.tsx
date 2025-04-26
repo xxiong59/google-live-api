@@ -40,7 +40,7 @@ function App() {
 
   const misty = getMistyInstance('10.134.71.217')
   const timer = setTimeout(() => {
-    misty?.connect2Misty();
+    // misty?.connect2Misty();
   }, 2000);
   return (
     <div className="App">
